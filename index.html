@@ -174,14 +174,17 @@ a.tab{text-decoration:none;display:inline-block}
 <div class="modal" id="login" hidden><div class="lc"><div class="brand"><h2>موقع الإدارة العامة لدار القرآن</h2></div>
 <form id="lf">
 <label class="field"><span>البريد الإلكتروني للدخول وتحرير مساحات الأقسام</span><input type="email" id="le" required autocomplete="username"></label>
+<label class="field"><span>كلمة المرور</span><input type="password" id="lp" required autocomplete="current-password"></label>
 <div class="err" id="lerr" hidden></div>
 <button class="primary" type="submit">دخول</button><button type="button" class="cancel" id="lc">إغلاق</button></form>
-<p class="hint">الدخول محلي: أدخل بريدك لتفعيل وضع التحرير على هذا الجهاز.</p></div></div>
+<p class="hint">أدخل بريدك وكلمة المرور لتفعيل وضع التحرير.</p></div></div>
 <div id="toast" class="toast" hidden></div>
 <script>
 (function(){
 "use strict";
 var KEY="dar_alquran_admin_v1",UK="dar_alquran_user_v1";
+/* SHA-256 لكلمة مرور الإدارة. لتغييرها: احسب SHA-256 لكلمة المرور الجديدة وضع الناتج هنا */
+var PASS_HASH="5f534d1dec749d63d7402276b5cc92942d9db470e85f3e112f93fe856adf7eda";
 var DEPTS=[["act","قسم الأنشطة والفعاليات","🎉"],["hq","قسم شؤون المقر","🏢"],["media","قسم الإعلام","🎬"],["prog","قسم البرامج والدورات القصيرة","🎓"],["pr","قسم العلاقات العامة","🤝"]];
 var D={staff:[],activities:[],subtasks:[],challenges:[],decisions:[]};
 var S={user:null,view:"home",dept:null,tab:"plan"};
@@ -244,7 +247,15 @@ function needAuth(){if(S.user)return true;$("login").hidden=false;toast("سجّ�
 function setUser(u){S.user=u&&u.email?{email:String(u.email)}:null;$("em").textContent=S.user?S.user.email:"";$("lb").textContent=S.user?"تسجيل الخروج":"تسجيل الدخول";$("lb").className="btn"+(S.user?" red":"");$("mode").textContent=S.user?"وضع التحرير":"وضع العرض فقط";render()}
 $("lb").onclick=function(){if(S.user){try{localStorage.removeItem(UK)}catch(e){}setUser(null)}else $("login").hidden=false};
 $("lc").onclick=function(){$("login").hidden=true};
-$("lf").onsubmit=function(e){e.preventDefault();var em=norm($("le").value);if(!em)return;try{localStorage.setItem(UK,em)}catch(x){}$("login").hidden=true;setUser({email:em})};
+async function sha(s){var b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return Array.prototype.map.call(new Uint8Array(b),function(x){return("0"+x.toString(16)).slice(-2)}).join("")}
+var bad=0,lockUntil=0;
+$("lf").onsubmit=async function(e){e.preventDefault();var em=norm($("le").value),er=$("lerr");if(!em)return;
+  function fail(t){er.textContent=t;er.hidden=false}
+  if(Date.now()<lockUntil){fail("محاولات كثيرة، انتظر "+Math.ceil((lockUntil-Date.now())/1000)+" ثانية.");return}
+  if(!(window.crypto&&crypto.subtle)){fail("يتطلب التحقق من كلمة المرور اتصالًا آمنًا (https).");return}
+  var h;try{h=await sha($("lp").value)}catch(x){fail("تعذر التحقق من كلمة المرور.");return}
+  if(h!==PASS_HASH){bad++;if(bad>=5){lockUntil=Date.now()+30000;bad=0}$("lp").value="";fail("كلمة المرور غير صحيحة.");return}
+  bad=0;er.hidden=true;$("lp").value="";try{localStorage.setItem(UK,em+"\n"+PASS_HASH)}catch(x){}$("login").hidden=true;setUser({email:em})};
 
 /* ---------- reusable pieces ---------- */
 function cl(t){return Array.isArray(t.checklist)?t.checklist:[]}
@@ -426,7 +437,7 @@ function route(){
 window.addEventListener("hashchange",route);
 window.addEventListener("unhandledrejection",function(e){if(e.preventDefault)e.preventDefault();toast(friendly(errText(e.reason)))});
 
-seed();migrate();var u0=null;try{u0=localStorage.getItem(UK)}catch(e){}setUser(u0?{email:u0}:null);route();
+seed();migrate();var u0=null;try{var sv=(localStorage.getItem(UK)||"").split("\n");u0=sv[1]===PASS_HASH&&sv[0]?sv[0]:null}catch(e){}setUser(u0?{email:u0}:null);route();
 $("ex").onclick=function(){var a=el("a");a.href=URL.createObjectURL(new Blob([localStorage.getItem(KEY)||"{}"],{type:"application/json"}));a.download="dar-alquran-backup.json";a.click()};
 $("im").onclick=function(){$("fi").click()};
 $("fi").onchange=function(){var f=this.files[0],inpt=this;if(!f)return;var r=new FileReader();r.onload=function(){try{var o=JSON.parse(r.result);if(!o||typeof o!=="object"||!Array.isArray(o.staff))throw 0;wr(o);migrate();toast("تم استيراد البيانات");load()}catch(e){toast("ملف غير صالح")}inpt.value=""};r.readAsText(f)};
