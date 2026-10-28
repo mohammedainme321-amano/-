@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>موقع الإدارة العامة لدار القرآن</title>
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Amiri:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <style>
 :root{--sky:#0284c7;--sky-d:#075985;--sky-l:#e0f2fe;--sf:#fff;--tx:#0c2a3f;--mu:#4b6a80;--ln:#bae0f5;--rd:#d92d20;--rb:#fff1f0;--rl:#f7b4ae;--sh:0 6px 24px rgba(2,132,199,.12)}
 *{box-sizing:border-box}
@@ -169,7 +170,26 @@ a.tab{text-decoration:none;display:inline-block}
 </header>
 <nav class="tabs" aria-label="أقسام النظام"><div id="nav"></div></nav>
 <main><div id="notice" class="err" role="alert" hidden></div><div id="app"></div>
-<details class="setup"><summary>إدارة البيانات المحلية</summary><p>تُحفظ البيانات في متصفح هذا الجهاز فقط (localStorage). استخدم النسخ الاحتياطي لنقلها إلى جهاز آخر.</p><p><button class="btn" id="ex" type="button">تنزيل نسخة احتياطية</button> <button class="btn" id="im" type="button">استيراد نسخة</button> <button class="btn red" id="rs" type="button">مسح كل البيانات</button><input type="file" id="fi" accept="application/json" hidden></p></details>
+<details class="setup"><summary>إعداد قاعدة البيانات (Supabase ← SQL Editor)</summary><p>شغّل الكود التالي مرة واحدة. القراءة متاحة للجميع، والإضافة والتعديل والحذف للمسجّلين فقط. الحسابات تُنشأ من Authentication ← Users.</p><pre class="sql">create table if not exists staff(id bigint generated always as identity primary key,name text not null,phone text,role text,department text,created_at timestamptz default now());
+alter table staff add column if not exists phone text;
+create table if not exists activities(id bigint generated always as identity primary key,department text not null,title text not null,description text,start_date date,end_date date,created_by text,created_at timestamptz default now());
+create table if not exists subtasks(id bigint generated always as identity primary key,activity_id bigint references activities(id) on delete cascade,department text not null,title text not null,assignee_name text,assignee_phone text,due_date date,progress int default 0 check(progress between 0 and 100),stumble_reason text,checklist jsonb default '[]'::jsonb,updated_at timestamptz default now());
+alter table subtasks add column if not exists assignee_phone text;
+alter table subtasks add column if not exists checklist jsonb default '[]'::jsonb;
+create table if not exists challenges(id bigint generated always as identity primary key,department text not null,title text not null,details text,severity text,status text default 'open',created_at timestamptz default now());
+create table if not exists decisions(id bigint generated always as identity primary key,department text not null,title text not null,details text,status text default 'pending',created_at timestamptz default now());
+do $$ declare t text; begin
+foreach t in array array['staff','activities','subtasks','challenges','decisions'] loop
+execute format('alter table %I enable row level security',t);
+execute format('drop policy if exists public_read on %I',t);
+execute format('drop policy if exists auth_insert on %I',t);
+execute format('drop policy if exists auth_update on %I',t);
+execute format('drop policy if exists auth_delete on %I',t);
+execute format('create policy public_read on %I for select to anon, authenticated using (true)',t);
+execute format('create policy auth_insert on %I for insert to authenticated with check (true)',t);
+execute format('create policy auth_update on %I for update to authenticated using (true) with check (true)',t);
+execute format('create policy auth_delete on %I for delete to authenticated using (true)',t);
+end loop; end $$;</pre></details>
 </main>
 <div class="modal" id="login" hidden><div class="lc"><div class="brand"><h2>موقع الإدارة العامة لدار القرآن</h2></div>
 <form id="lf">
@@ -177,14 +197,14 @@ a.tab{text-decoration:none;display:inline-block}
 <label class="field"><span>كلمة المرور</span><input type="password" id="lp" required autocomplete="current-password"></label>
 <div class="err" id="lerr" hidden></div>
 <button class="primary" type="submit">دخول</button><button type="button" class="cancel" id="lc">إغلاق</button></form>
-<p class="hint">أدخل بريدك وكلمة المرور لتفعيل وضع التحرير.</p></div></div>
+<p class="hint">أدخل بريد وكلمة مرور حسابك في Supabase لتفعيل وضع التحرير.</p></div></div>
 <div id="toast" class="toast" hidden></div>
 <script>
 (function(){
 "use strict";
-var KEY="dar_alquran_admin_v1",UK="dar_alquran_user_v1";
-/* SHA-256 لكلمة مرور الإدارة. لتغييرها: احسب SHA-256 لكلمة المرور الجديدة وضع الناتج هنا */
-var PASS_HASH="5f534d1dec749d63d7402276b5cc92942d9db470e85f3e112f93fe856adf7eda";
+/* إعدادات Supabase (Project Settings ← API): الرابط والمفتاح العام (anon / publishable) */
+var SUPABASE_URL="https://copvxmmfifdjdqsotxrc.supabase.co";
+var SUPABASE_ANON_KEY="sb_publishable_C9SD2WS5j3ch2mcwTRmPBQ_jyGFxKWx";
 var DEPTS=[["act","قسم الأنشطة والفعاليات","🎉"],["hq","قسم شؤون المقر","🏢"],["media","قسم الإعلام","🎬"],["prog","قسم البرامج والدورات القصيرة","🎓"],["pr","قسم العلاقات العامة","🤝"]];
 var D={staff:[],activities:[],subtasks:[],challenges:[],decisions:[]};
 var S={user:null,view:"home",dept:null,tab:"plan"};
@@ -207,55 +227,48 @@ function bar(p){var b=el("div","bar"),i=el("i");i.style.width=p+"%";return add(b
 function norm(s){return String(s||"").trim().toLowerCase()}
 var tt;function toast(m){var t=$("toast");t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(function(){t.hidden=true},4500)}
 
-/* ---------- local storage data layer ---------- */
-function rd(){try{return JSON.parse(localStorage.getItem(KEY))||{}}catch(e){return{}}}
-function wr(d){localStorage.setItem(KEY,JSON.stringify(d))}
-function Q(t){
-  var op="select",pay=null,flt=null,one=false,self={
-    select:function(){return self},single:function(){one=true;return self},
-    insert:function(o){op="insert";pay=o;return self},update:function(o){op="update";pay=o;return self},
-    delete:function(){op="delete";return self},eq:function(c,v){flt=[c,v];return self},
-    then:function(ok,no){return run().then(ok,no)}};
-  function run(){return new Promise(function(done){
-    try{var d=rd(),rows=d[t]||[],out=null;
-      if(op==="select")out=rows.slice();
-      else if(op==="insert"){var a=[].concat(pay).map(function(o){var r=JSON.parse(JSON.stringify(o));d.seq=(d.seq||0)+1;r.id=d.seq;r.created_at=new Date().toISOString();return r});d[t]=rows.concat(a);wr(d);out=one?a[0]:a}
-      else if(op==="update"){rows.forEach(function(r){if(r[flt[0]]===flt[1])Object.assign(r,JSON.parse(JSON.stringify(pay)))});d[t]=rows;wr(d)}
-      else{d[t]=rows.filter(function(r){return r[flt[0]]!==flt[1]});
-        if(t==="activities")d.subtasks=(d.subtasks||[]).filter(function(s){return s.activity_id!==flt[1]});wr(d)}
-      done({data:out,error:null})}
-    catch(e){done({data:null,error:{message:String(e&&e.message||e)}})}})}
-  return self}
-var sb={from:Q};
-function errText(e){try{if(!e)return"خطأ غير معروف";if(typeof e==="string")return e;if(e.message)return String(e.message)}catch(x){}return"خطأ غير معروف"}
-function friendly(m){return String(m).toLowerCase().indexOf("quota")>-1?"امتلأت مساحة التخزين المحلية في المتصفح.":m}
-function migrate(){try{var d=rd(),ch=false;["staff","activities","subtasks","challenges","decisions"].forEach(function(t){if(d[t]){var n=d[t].filter(function(r){return r.department!=="edu"});if(n.length!==d[t].length){d[t]=n;ch=true}}});if(ch)wr(d)}catch(e){}}
-function seed(){try{var d=rd();if(d.staff)return;d.seq=0;
-  d.staff=[["خالد العتيبي","منسّق أنشطة","act"],["سعد الدوسري","مسؤول المقر","hq"],["فهد القحطاني","مصمم إعلامي","media"],["ياسر الغامدي","مدرّب برامج","prog"],["عبدالله الشهري","مسؤول علاقات","pr"]].map(function(s){d.seq++;return{id:d.seq,name:s[0],role:s[1],department:s[2],phone:"05000000"+("0"+d.seq).slice(-2)}});
-  wr(d)}catch(e){}}
+/* ---------- Supabase client (Auth + Database) ---------- */
+function safeFetch(input,init){
+  var o={},src=init||{},plain={},h=src.headers;
+  Object.keys(src).forEach(function(k){if(k!=="signal"&&k!=="headers")o[k]=src[k]});
+  if(h){if(Array.isArray(h))h.forEach(function(p){plain[p[0]]=p[1]});
+    else if(typeof h.forEach==="function")h.forEach(function(v,k){plain[k]=v});
+    else Object.keys(h).forEach(function(k){plain[k]=h[k]})}
+  o.headers=plain;
+  return fetch(typeof input==="string"?input:(input&&input.url?input.url:String(input)),o);
+}
+var sb=null;
+try{if(SUPABASE_URL&&SUPABASE_ANON_KEY)sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{global:{fetch:safeFetch}})}catch(e){}
+function errText(e){try{if(!e)return"خطأ غير معروف";if(typeof e==="string")return e;if(e.message)return String(e.message);if(e.details)return String(e.details)}catch(x){}return"خطأ غير معروف"}
+function friendly(m){var l=String(m).toLowerCase();
+  if(l.indexOf("invalid login")>-1)return"البريد أو كلمة المرور غير صحيحة، أو الحساب غير موجود في Supabase Authentication.";
+  if(l.indexOf("email not confirmed")>-1)return"لم يتم تأكيد البريد الإلكتروني لهذا الحساب.";
+  if(l.indexOf("does not exist")>-1||l.indexOf("schema cache")>-1||l.indexOf("could not find")>-1)return"الجداول أو الأعمدة غير موجودة: شغّل كود SQL أسفل الصفحة. ["+m+"]";
+  if(l.indexOf("row-level security")>-1||l.indexOf("permission denied")>-1)return"صلاحيات الجدول (RLS) غير مضبوطة أو تحتاج تسجيل الدخول. ["+m+"]";
+  if(l.indexOf("failed to fetch")>-1||l.indexOf("load failed")>-1)return"تعذر الاتصال بـ Supabase. تحقق من الإنترنت. ["+m+"]";
+  return m}
 /* always returns plain JSON data + a string error, never raw response objects */
 async function q(fn){try{var r=await fn();return{data:r&&r.data?JSON.parse(JSON.stringify(r.data)):null,error:r&&r.error?errText(r.error):null}}catch(e){return{data:null,error:errText(e)}}}
 async function load(){
+  if(!sb){$("notice").textContent="تعذر تحميل مكتبة Supabase أو إعداداتها (SUPABASE_URL / SUPABASE_ANON_KEY).";$("notice").hidden=false;return}
   var T=Object.keys(D),rs=await Promise.all(T.map(function(t){return q(function(){return sb.from(t).select("*")})})),err="";
-  rs.forEach(function(r,i){D[T[i]]=r.data||[];if(r.error&&!err)err=T[i]+": "+friendly(r.error)});
+  rs.forEach(function(r,i){D[T[i]]=(r.data||[]).filter(function(x){return x.department!=="edu"});if(r.error&&!err)err=T[i]+": "+friendly(r.error)});
   $("notice").textContent=err;$("notice").hidden=!err;render();
 }
 function done(r,m){if(r.error)toast(friendly(r.error));else{toast(m);load()}}
 function needAuth(){if(S.user)return true;$("login").hidden=false;toast("سجّل الدخول أولًا لحفظ التغييرات");return false}
 
 /* ---------- auth ---------- */
-function setUser(u){S.user=u&&u.email?{email:String(u.email)}:null;$("em").textContent=S.user?S.user.email:"";$("lb").textContent=S.user?"تسجيل الخروج":"تسجيل الدخول";$("lb").className="btn"+(S.user?" red":"");$("mode").textContent=S.user?"وضع التحرير":"وضع العرض فقط";render()}
-$("lb").onclick=function(){if(S.user){try{localStorage.removeItem(UK)}catch(e){}setUser(null)}else $("login").hidden=false};
+function setUser(u){S.user=u&&u.email?{email:String(u.email)}:null;if(S.user)$("login").hidden=true;$("em").textContent=S.user?S.user.email:"";$("lb").textContent=S.user?"تسجيل الخروج":"تسجيل الدخول";$("lb").className="btn"+(S.user?" red":"");$("mode").textContent=S.user?"وضع التحرير":"وضع العرض فقط";render()}
+$("lb").onclick=async function(){if(S.user){await q(function(){return sb.auth.signOut()});setUser(null)}else $("login").hidden=false};
 $("lc").onclick=function(){$("login").hidden=true};
-async function sha(s){var b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return Array.prototype.map.call(new Uint8Array(b),function(x){return("0"+x.toString(16)).slice(-2)}).join("")}
-var bad=0,lockUntil=0;
-$("lf").onsubmit=async function(e){e.preventDefault();var em=norm($("le").value),er=$("lerr");if(!em)return;
-  function fail(t){er.textContent=t;er.hidden=false}
-  if(Date.now()<lockUntil){fail("محاولات كثيرة، انتظر "+Math.ceil((lockUntil-Date.now())/1000)+" ثانية.");return}
-  if(!(window.crypto&&crypto.subtle)){fail("يتطلب التحقق من كلمة المرور اتصالًا آمنًا (https).");return}
-  var h;try{h=await sha($("lp").value)}catch(x){fail("تعذر التحقق من كلمة المرور.");return}
-  if(h!==PASS_HASH){bad++;if(bad>=5){lockUntil=Date.now()+30000;bad=0}$("lp").value="";fail("كلمة المرور غير صحيحة.");return}
-  bad=0;er.hidden=true;$("lp").value="";try{localStorage.setItem(UK,em+"\n"+PASS_HASH)}catch(x){}$("login").hidden=true;setUser({email:em})};
+$("lf").onsubmit=async function(e){e.preventDefault();var er=$("lerr"),sub=e.target.querySelector(".primary");
+  if(!sb){er.textContent="تعذر تحميل مكتبة Supabase أو إعداداتها.";er.hidden=false;return}
+  sub.disabled=true;
+  var r=await q(function(){return sb.auth.signInWithPassword({email:$("le").value.trim(),password:$("lp").value})});
+  sub.disabled=false;
+  if(r.error){er.textContent="تعذر الدخول: "+friendly(r.error);er.hidden=false;return}
+  er.hidden=true;$("lp").value="";$("login").hidden=true;setUser(r.data&&r.data.user)};
 
 /* ---------- reusable pieces ---------- */
 function cl(t){return Array.isArray(t.checklist)?t.checklist:[]}
@@ -437,11 +450,12 @@ function route(){
 window.addEventListener("hashchange",route);
 window.addEventListener("unhandledrejection",function(e){if(e.preventDefault)e.preventDefault();toast(friendly(errText(e.reason)))});
 
-seed();migrate();var u0=null;try{var sv=(localStorage.getItem(UK)||"").split("\n");u0=sv[1]===PASS_HASH&&sv[0]?sv[0]:null}catch(e){}setUser(u0?{email:u0}:null);route();
-$("ex").onclick=function(){var a=el("a");a.href=URL.createObjectURL(new Blob([localStorage.getItem(KEY)||"{}"],{type:"application/json"}));a.download="dar-alquran-backup.json";a.click()};
-$("im").onclick=function(){$("fi").click()};
-$("fi").onchange=function(){var f=this.files[0],inpt=this;if(!f)return;var r=new FileReader();r.onload=function(){try{var o=JSON.parse(r.result);if(!o||typeof o!=="object"||!Array.isArray(o.staff))throw 0;wr(o);migrate();toast("تم استيراد البيانات");load()}catch(e){toast("ملف غير صالح")}inpt.value=""};r.readAsText(f)};
-$("rs").onclick=function(){if(!needAuth()||!confirm("مسح كل البيانات نهائيًا؟"))return;try{localStorage.removeItem(KEY)}catch(e){}seed();load();toast("تم مسح البيانات")};
+setUser(null);
+(async function(){
+  var r=await q(function(){return sb.auth.getSession()}),s=r.data&&r.data.session;
+  setUser(s?s.user:null);route();
+  try{sb.auth.onAuthStateChange(function(ev,session){var em=session&&session.user&&session.user.email||null;if((S.user&&S.user.email||null)===em)return;setUser(session?session.user:null)})}catch(e){}
+})();
 load();
 })();
 </script>
